@@ -1,0 +1,10 @@
+run = "bash start.sh"
+entrypoint = "backend/app/main.py"
+modules = ["python-3.11", "nodejs-20"]
+
+[deployment]
+run = ["bash", "start.sh"]
+deploymentTarget = "cloudrun"
+
+[nix]
+channel = "stable-24_05"

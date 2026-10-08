@@ -1,0 +1,21 @@
+Gabarit PBIP écrit à la main.
+
+Power BI Desktop n'était pas installé sur la machine qui a produit ce dépôt.
+Ce dossier n'est donc pas un enregistrement « Enregistrer sous > Projet Power BI »
+fait avec l'édition grand public de septembre 2026.
+
+Ce qui est recopié des documents publics (voir backend/schemas/SOURCES.txt) :
+- definition.pbir version 4.0, schéma definitionProperties 2.0.0
+- version.json de contenu : 2.0.0 (accepté par le schéma versionMetadata,
+  valeur indiquée pour les Desktop 2026)
+- page.json : schéma page 2.0.0, 1280 × 720, comme l'exemple Microsoft Learn
+- visual.json : schéma visualContainer 2.5.0
+- report.json : schéma report 3.1.0
+- thème de base cité dans l'exemple public : CY25SU12
+- reportVersionAtImport de cet exemple : visual 2.5.0, report 3.1.0, page 2.3.0
+
+compatibilityLevel TMDL : 1702. Valeur documentée publiquement pour un modèle
+Power BI récent, pas lue dans un fichier produit par Desktop.
+
+Un visual.json accepté par ces schémas peut encore être refusé à l'ouverture
+dans Power BI Desktop. Le niveau A de ce générateur ne promet pas cette ouverture.
