@@ -9,9 +9,12 @@ import zipfile
 from pathlib import Path
 
 import pytest
+from docx import Document
 from fastapi.testclient import TestClient
 
 from backend.app.errors import ErreurMetier
+from backend.app.pipeline.docx_report import construire_docx
+from backend.app.pipeline.modele import construire_plan
 from backend.app.limits import COLONNES_MAX, TAILLE_MAX_OCTETS
 from backend.app.pipeline.clean import nettoyer
 from backend.app.pipeline.dates import analyser_date
@@ -154,6 +157,52 @@ def test_limites():
     with pytest.raises(ErreurMetier) as vide:
         lire_csv(b"date;montant\n")
     assert vide.value.code == "csv_vide"
+
+
+def test_compte_rendu_lit_les_chiffres():
+    csv = """implantation;region;prix_gazole;prix_e10
+route;Ouest;1,70;1,55
+route;Ouest;1,72;1,57
+route;Est;1,90;1,74
+autoroute;Ouest;1,95;1,80
+autoroute;Est;2,05;1,88
+autoroute;Est;2,01;1,86
+""".encode()
+    frame, meta = lire_csv(csv)
+    profil = profiler(frame, {**meta, "nom_fichier": "prix.csv"})
+    roles = {col["nom"]: col["role_propose"] for col in profil["colonnes"]}
+    roles.update(
+        {
+            "implantation": "categorie",
+            "region": "geographique",
+            "prix_gazole": "numerique",
+            "prix_e10": "numerique",
+        }
+    )
+    nettoye, journal = nettoyer(frame, roles, {}, ";", None)
+    plan = construire_plan(nettoye, roles, None)
+    theme = construire_theme(["#0F6E56", "#E6A817", "#C4493A"])
+    blob = construire_docx(
+        "prix.csv",
+        nettoye,
+        journal,
+        profil,
+        plan,
+        theme["theme"],
+        "A",
+        meta["encodage"],
+        "virgule",
+    )
+    document = Document(io.BytesIO(blob))
+    texte = "\n".join(p.text for p in document.paragraphs)
+    assert "Une ligne = une observation du fichier." in texte
+    assert "50 litres" in texte
+    assert "CheminFichierCsv" in texte
+    assert "Méthodologie de nettoyage" not in texte
+    assert "Type avant" not in texte
+    assert "Niveau PBIR obtenu : A." in texte
+    assert texte.index("Conclusion") < texte.index("Annexes")
+    assert texte.index("Lecture des chiffres") < texte.index("Ce qui pèse le plus")
 
 
 def test_api_zip(client: TestClient):
