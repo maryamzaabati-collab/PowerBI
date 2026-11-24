@@ -57,7 +57,10 @@ def _visuel(type_visuel: str, x: float, y: float, w: float, h: float, titre: str
     return corps
 
 
-def _texte(x: float, y: float, w: float, h: float, texte: str) -> dict:
+def _texte(x: float, y: float, w: float, h: float, texte: str, taille: str = "14px", gras: bool = False) -> dict:
+    style = {"fontFamily": "Segoe UI Semibold" if gras else "Segoe UI", "fontSize": taille}
+    if gras:
+        style["fontWeight"] = "bold"
     return {
         "$schema": SCHEMAS["visual"],
         "name": identifiant_hex(),
@@ -73,7 +76,7 @@ def _texte(x: float, y: float, w: float, h: float, texte: str) -> dict:
                                     "textRuns": [
                                         {
                                             "value": texte,
-                                            "textStyle": {"fontFamily": "Segoe UI", "fontSize": "14px"},
+                                            "textStyle": style,
                                         }
                                     ]
                                 }
@@ -174,233 +177,231 @@ def generer_pbir(plan: Plan, theme: dict) -> dict:
     return {"fichiers": fichiers, "niveau": niveau, "detail": detail, "pages": _resume(pages)}
 
 
+# Grille de page 1280 × 720 : marge 24, gouttière 16, titre en haut, contenu en dessous.
+LARGEUR, HAUTEUR = 1280, 720
+MARGE, GOUTTIERE = 24, 16
+HAUT_CONTENU = 72
+LARGEUR_UTILE = LARGEUR - 2 * MARGE
+HAUTEUR_UTILE = HAUTEUR - MARGE - HAUT_CONTENU
+COLONNE_DROITE = 320
+
+
+def _colonnes(nombre: int, largeur: float = LARGEUR_UTILE, x: float = MARGE) -> list[tuple[float, float]]:
+    """Découpe une largeur en colonnes égales : [(x, largeur), …]."""
+    taille = (largeur - (nombre - 1) * GOUTTIERE) / nombre
+    return [(x + index * (taille + GOUTTIERE), taille) for index in range(nombre)]
+
+
+def _titre_page(nom: str) -> dict:
+    return {
+        "fragile": False,
+        "secours": nom,
+        "titre": True,
+        "json": _texte(MARGE, 16, LARGEUR_UTILE, 44, nom, taille="20px", gras=True),
+    }
+
+
+def _message(texte: str, secours: str) -> dict:
+    return {"fragile": False, "secours": secours, "json": _texte(MARGE, HAUT_CONTENU, LARGEUR_UTILE, 200, texte)}
+
+
+def _barres(table: str, colonne: str, mesure: str, x: float, y: float, w: float, h: float, *, top: bool, secours: str) -> dict:
+    tri = [{"field": _mesure(mesure), "direction": "Descending"}]
+    return {
+        "fragile": False,
+        "topn": top,
+        "secours": secours,
+        "json": _visuel(
+            "clusteredBarChart",
+            x,
+            y,
+            w,
+            h,
+            colonne,
+            _requete(
+                {
+                    "Category": [_projection(_colonne(table, colonne), f"{table}.{colonne}")],
+                    "Y": [_projection(_mesure(mesure), f"Donnees.{mesure}")],
+                },
+                tri=tri,
+            ),
+            filtre=_filtre_top(table, colonne) if top else None,
+        ),
+    }
+
+
+def _courbe(plan: Plan, x: float, y: float, w: float, h: float) -> dict:
+    projections = [_projection(_mesure(f"Total {col}"), f"Donnees.Total {col}") for col in plan.mesures[:3]]
+    return {
+        "fragile": False,
+        "secours": "Courbe à poser : Calendrier[Date] et les mesures Total.",
+        "json": _visuel(
+            "lineChart",
+            x,
+            y,
+            w,
+            h,
+            "Évolution",
+            _requete(
+                {
+                    "Category": [_projection(_colonne("Calendrier", "Date"), "Calendrier.Date")],
+                    "Y": projections,
+                },
+                tri=[{"field": _colonne("Calendrier", "Date"), "direction": "Ascending"}],
+            ),
+        ),
+    }
+
+
+def _carte(mesure: str, libelle: str, x: float, y: float, w: float, h: float) -> dict:
+    return {
+        "fragile": False,
+        "secours": f"Carte à poser : {libelle}.",
+        "json": _visuel("card", x, y, w, h, mesure, _requete({"Values": [_projection(_mesure(mesure), f"Donnees.{mesure}")]})),
+    }
+
+
+def _segment(table: str, colonne: str, titre: str, x: float, y: float, w: float, h: float, secours: str) -> dict:
+    return {
+        "fragile": True,
+        "secours": secours,
+        "json": _visuel(
+            "slicer", x, y, w, h, titre, _requete({"Values": [_projection(_colonne(table, colonne), f"{table}.{colonne}")]})
+        ),
+    }
+
+
+def _anneau(
+    table: str, colonne: str, x: float, y: float, w: float, h: float, secours: str, mesure: str = "Part du total"
+) -> dict:
+    return {
+        "fragile": False,
+        "secours": secours,
+        "json": _visuel(
+            "donutChart",
+            x,
+            y,
+            w,
+            h,
+            "Part du total",
+            _requete(
+                {
+                    "Category": [_projection(_colonne(table, colonne), f"{table}.{colonne}")],
+                    "Y": [_projection(_mesure(mesure), f"Donnees.{mesure}")],
+                }
+            ),
+        ),
+    }
+
+
 def _pages(plan: Plan) -> list[dict]:
     cartes = [("Nombre de lignes", "Nombre de lignes de Donnees")]
     for colonne in plan.mesures[:3]:
         cartes.append((f"Total {colonne}", f"Mesure Total {colonne}"))
-    page_vue = {"nom": "Vue d'ensemble", "visuels": []}
-    for index, (mesure, libelle) in enumerate(cartes[:4]):
-        page_vue["visuels"].append(
-            {
-                "fragile": False,
-                "secours": f"Carte à poser : {libelle}.",
-                "json": _visuel(
-                    "card",
-                    16 + index * 316,
-                    16,
-                    300,
-                    120,
-                    mesure,
-                    _requete({"Values": [_projection(_mesure(mesure), f"Donnees.{mesure}")]}),
-                ),
-            }
-        )
+    cartes = cartes[:4]
+
+    # Vue d'ensemble : bandeau de KPI, puis tendance et classement côte à côte.
+    page_vue = {"nom": "Vue d'ensemble", "visuels": [_titre_page("Vue d'ensemble")]}
+    hauteur_kpi = 104
+    for (mesure, libelle), (x, w) in zip(cartes, _colonnes(len(cartes))):
+        page_vue["visuels"].append(_carte(mesure, libelle, x, HAUT_CONTENU, w, hauteur_kpi))
+    y2 = HAUT_CONTENU + hauteur_kpi + GOUTTIERE
+    h2 = HAUTEUR - MARGE - y2
     if plan.categorie_principale and plan.mesures:
         table, colonne = plan.categorie_principale
         mesure = f"Total {plan.mesures[0]}"
-        page_vue["visuels"].append(
-            {
-                "fragile": False,
-                "topn": True,
-                "secours": f"Barres groupées à poser : {table}[{colonne}] et {mesure}.",
-                "json": _visuel(
-                    "clusteredBarChart",
-                    16,
-                    156,
-                    900,
-                    540,
-                    colonne,
-                    _requete(
-                        {
-                            "Category": [_projection(_colonne(table, colonne), f"{table}.{colonne}")],
-                            "Y": [_projection(_mesure(mesure), f"Donnees.{mesure}")],
-                        },
-                        tri=[{"field": _mesure(mesure), "direction": "Descending"}],
-                    ),
-                    filtre=_filtre_top(table, colonne),
-                ),
-            }
-        )
-        if plan.cardinalites.get(colonne, 99) <= 12:
+        secours = f"Barres groupées à poser : {table}[{colonne}] et {mesure}."
+        segment = plan.cardinalites.get(colonne, 99) <= 12
+        if plan.date_pilote:
+            (xa, wa), (xb, wb) = _colonnes(2)
+            page_vue["visuels"].append(_courbe(plan, xa, y2, wa, h2))
+            page_vue["visuels"].append(_barres(table, colonne, mesure, xb, y2, wb, h2, top=True, secours=secours))
+        elif segment:
+            largeur = LARGEUR_UTILE - COLONNE_DROITE - GOUTTIERE
+            page_vue["visuels"].append(_barres(table, colonne, mesure, MARGE, y2, largeur, h2, top=True, secours=secours))
             page_vue["visuels"].append(
-                {
-                    "fragile": True,
-                    "secours": f"Segment à poser sur {table}[{colonne}].",
-                    "json": _visuel(
-                        "slicer",
-                        936,
-                        156,
-                        320,
-                        540,
-                        colonne,
-                        _requete({"Values": [_projection(_colonne(table, colonne), f"{table}.{colonne}")]}),
-                    ),
-                }
+                _segment(table, colonne, colonne, MARGE + largeur + GOUTTIERE, y2, COLONNE_DROITE, h2, f"Segment à poser sur {table}[{colonne}].")
             )
+        else:
+            page_vue["visuels"].append(_barres(table, colonne, mesure, MARGE, y2, LARGEUR_UTILE, h2, top=True, secours=secours))
     elif not plan.mesures:
         page_vue["visuels"].append(
             {
                 "fragile": False,
                 "secours": "Pas de colonne numérique pour les barres.",
-                "json": _texte(16, 156, 1248, 160, "Aucune colonne numérique confirmée : les barres ne sont pas générées."),
+                "json": _texte(MARGE, y2, LARGEUR_UTILE, 160, "Aucune colonne numérique confirmée : les barres ne sont pas générées."),
             }
         )
     elif not plan.categorie_principale:
-        page_vue["visuels"].append(
-            {
-                "fragile": False,
-                "secours": "Aucune catégorie confirmée.",
-                "json": _texte(16, 156, 1248, 200, "Aucune catégorie confirmée : les barres ne sont pas générées."),
-            }
-        )
+        if plan.date_pilote:
+            page_vue["visuels"].append(_courbe(plan, MARGE, y2, LARGEUR_UTILE, h2))
+        else:
+            page_vue["visuels"].append(
+                {
+                    "fragile": False,
+                    "secours": "Aucune catégorie confirmée.",
+                    "json": _texte(MARGE, y2, LARGEUR_UTILE, 200, "Aucune catégorie confirmée : les barres ne sont pas générées."),
+                }
+            )
 
-    page_evo = {"nom": "Évolution", "visuels": []}
+    # Évolution : grande courbe à gauche, indicateurs et filtre de dates à droite.
+    page_evo = {"nom": "Évolution", "visuels": [_titre_page("Évolution")]}
     if plan.date_pilote and plan.mesures:
-        projections = [
-            _projection(_mesure(f"Total {col}"), f"Donnees.Total {col}") for col in plan.mesures[:3]
-        ]
+        largeur = LARGEUR_UTILE - COLONNE_DROITE - GOUTTIERE
+        x_droite = MARGE + largeur + GOUTTIERE
+        page_evo["visuels"].append(_courbe(plan, MARGE, HAUT_CONTENU, largeur, HAUTEUR_UTILE))
+        page_evo["visuels"].append(_carte("Cumul annuel", "Cumul annuel", x_droite, HAUT_CONTENU, COLONNE_DROITE, 112))
         page_evo["visuels"].append(
-            {
-                "fragile": False,
-                "secours": "Courbe à poser : Calendrier[Date] et les mesures Total.",
-                "json": _visuel(
-                    "lineChart",
-                    16,
-                    16,
-                    900,
-                    520,
-                    "Évolution",
-                    _requete(
-                        {
-                            "Category": [_projection(_colonne("Calendrier", "Date"), "Calendrier.Date")],
-                            "Y": projections,
-                        },
-                        tri=[{"field": _colonne("Calendrier", "Date"), "direction": "Ascending"}],
-                    ),
-                ),
-            }
+            _carte("Vs mois precedent", "Vs mois precedent", x_droite, HAUT_CONTENU + 112 + GOUTTIERE, COLONNE_DROITE, 112)
         )
+        y_segment = HAUT_CONTENU + 2 * (112 + GOUTTIERE)
         page_evo["visuels"].append(
-            {
-                "fragile": False,
-                "secours": "Carte à poser : Cumul annuel.",
-                "json": _visuel(
-                    "card",
-                    936,
-                    16,
-                    320,
-                    140,
-                    "Cumul annuel",
-                    _requete({"Values": [_projection(_mesure("Cumul annuel"), "Donnees.Cumul annuel")]}),
-                ),
-            }
-        )
-        page_evo["visuels"].append(
-            {
-                "fragile": True,
-                "secours": "Segment de dates à poser sur Calendrier[Date].",
-                "json": _visuel(
-                    "slicer",
-                    936,
-                    176,
-                    320,
-                    360,
-                    "Date",
-                    _requete({"Values": [_projection(_colonne("Calendrier", "Date"), "Calendrier.Date")]}),
-                ),
-            }
+            _segment(
+                "Calendrier",
+                "Date",
+                "Date",
+                x_droite,
+                y_segment,
+                COLONNE_DROITE,
+                HAUTEUR - MARGE - y_segment,
+                "Segment de dates à poser sur Calendrier[Date].",
+            )
         )
     else:
         page_evo["visuels"].append(
-            {
-                "fragile": False,
-                "secours": "Pas de page chiffrée d'évolution.",
-                "json": _texte(
-                    16,
-                    16,
-                    1248,
-                    200,
-                    "Pas de date pilote ou pas de mesure : la page d'évolution n'a pas de courbe. Le calendrier n'est pas créé.",
-                ),
-            }
+            _message(
+                "Pas de date pilote ou pas de mesure : la page d'évolution n'a pas de courbe. Le calendrier n'est pas créé.",
+                "Pas de page chiffrée d'évolution.",
+            )
         )
 
-    page_rep = {"nom": "Répartitions", "visuels": []}
+    # Répartitions : classement et parts côte à côte.
+    page_rep = {"nom": "Répartitions", "visuels": [_titre_page("Répartitions")]}
     if plan.categorie_secondaire and plan.mesures:
         table, colonne = plan.categorie_secondaire
         mesure = f"Total {plan.mesures[0]}"
+        (xa, wa), (xb, wb) = _colonnes(2)
         page_rep["visuels"].append(
-            {
-                "fragile": False,
-                "secours": f"Barres à poser : {table}[{colonne}] et {mesure}.",
-                "json": _visuel(
-                    "clusteredBarChart",
-                    16,
-                    16,
-                    640,
-                    640,
-                    colonne,
-                    _requete(
-                        {
-                            "Category": [_projection(_colonne(table, colonne), f"{table}.{colonne}")],
-                            "Y": [_projection(_mesure(mesure), f"Donnees.{mesure}")],
-                        }
-                    ),
-                ),
-            }
+            _barres(table, colonne, mesure, xa, HAUT_CONTENU, wa, HAUTEUR_UTILE, top=False, secours=f"Barres à poser : {table}[{colonne}] et {mesure}.")
         )
         page_rep["visuels"].append(
-            {
-                "fragile": False,
-                "secours": "Anneau à poser : catégorie et Part du total.",
-                "json": _visuel(
-                    "donutChart",
-                    680,
-                    16,
-                    560,
-                    640,
-                    "Part du total",
-                    _requete(
-                        {
-                            "Category": [_projection(_colonne(table, colonne), f"{table}.{colonne}")],
-                            "Y": [_projection(_mesure("Part du total"), "Donnees.Part du total")],
-                        }
-                    ),
-                ),
-            }
+            # « Part du total » ne retire que le filtre de la catégorie principale : découpée par une
+            # autre catégorie, chaque part vaudrait 100 %. L'anneau calcule lui-même les parts du Total.
+            _anneau(
+                table, colonne, xb, HAUT_CONTENU, wb, HAUTEUR_UTILE, "Anneau à poser : catégorie et Part du total.", mesure=mesure
+            )
         )
     elif plan.categorie_principale and plan.mesures:
         table, colonne = plan.categorie_principale
         page_rep["visuels"].append(
-            {
-                "fragile": False,
-                "secours": f"Anneau à poser : {table}[{colonne}] et Part du total.",
-                "json": _visuel(
-                    "donutChart",
-                    16,
-                    16,
-                    1248,
-                    640,
-                    "Part du total",
-                    _requete(
-                        {
-                            "Category": [_projection(_colonne(table, colonne), f"{table}.{colonne}")],
-                            "Y": [_projection(_mesure("Part du total"), "Donnees.Part du total")],
-                        }
-                    ),
-                ),
-            }
+            _anneau(table, colonne, MARGE, HAUT_CONTENU, LARGEUR_UTILE, HAUTEUR_UTILE, f"Anneau à poser : {table}[{colonne}] et Part du total.")
         )
     else:
         page_rep["visuels"].append(
-            {
-                "fragile": False,
-                "secours": "Pas de catégorie pour les répartitions.",
-                "json": _texte(16, 16, 1248, 200, "Aucune catégorie confirmée : ni barres ni anneau."),
-            }
+            _message("Aucune catégorie confirmée : ni barres ni anneau.", "Pas de catégorie pour les répartitions.")
         )
 
-    page_cor = {"nom": "Corrélations", "visuels": []}
+    page_cor = {"nom": "Corrélations", "visuels": [_titre_page("Corrélations")]}
     if len(plan.mesures) >= 2:
         gauche, droite = (plan.paire_correlation[0], plan.paire_correlation[1]) if plan.paire_correlation else (plan.mesures[0], plan.mesures[1])
         roles = {
@@ -414,52 +415,45 @@ def _pages(plan: Plan) -> list[dict]:
             {
                 "fragile": False,
                 "secours": f"Nuage à poser : Total {gauche} et Total {droite}.",
-                "json": _visuel("scatterChart", 16, 16, 1248, 680, f"{gauche} et {droite}", _requete(roles)),
+                "json": _visuel("scatterChart", MARGE, HAUT_CONTENU, LARGEUR_UTILE, HAUTEUR_UTILE, f"{gauche} et {droite}", _requete(roles)),
             }
         )
     else:
         page_cor["visuels"].append(
-            {
-                "fragile": False,
-                "secours": "Pas deux mesures pour un nuage.",
-                "json": _texte(16, 16, 1248, 200, "Il faut deux colonnes numériques pour un nuage de points."),
-            }
+            _message("Il faut deux colonnes numériques pour un nuage de points.", "Pas deux mesures pour un nuage.")
         )
 
-    page_det = {"nom": "Détail", "visuels": []}
+    page_det = {"nom": "Détail", "visuels": [_titre_page("Détail")]}
     colonnes = [col for col in plan.colonnes_faits if plan.roles.get(col) != "ignoree"][:15]
-    projections = [_projection(_colonne("Donnees", col), f"Donnees.{col}") for col in colonnes]
+    # Une clé étrangère cachée est lue depuis sa dimension.
+    tables = {dimension.cle: dimension.nom for dimension in plan.dimensions}
+    projections = [
+        _projection(_colonne(tables.get(col, "Donnees"), col), f"{tables.get(col, 'Donnees')}.{col}") for col in colonnes
+    ]
+    segments = _segments(plan)
+    largeur = LARGEUR_UTILE - COLONNE_DROITE - GOUTTIERE if segments else LARGEUR_UTILE
     page_det["visuels"].append(
         {
             "fragile": False,
             "secours": "Table à poser : " + ", ".join(colonnes) + ".",
-            "json": _visuel(
-                "tableEx",
-                16,
-                16,
-                900 if _segments(plan) else 1248,
-                688,
-                "Détail",
-                _requete({"Values": projections}),
-            ),
+            "json": _visuel("tableEx", MARGE, HAUT_CONTENU, largeur, HAUTEUR_UTILE, "Détail", _requete({"Values": projections})),
         }
     )
-    for index, (table, colonne) in enumerate(_segments(plan)):
-        page_det["visuels"].append(
-            {
-                "fragile": True,
-                "secours": f"Segment à poser sur {table}[{colonne}].",
-                "json": _visuel(
-                    "slicer",
-                    936,
-                    16 + index * 340,
-                    320,
-                    320,
+    if segments:
+        hauteur = (HAUTEUR_UTILE - (len(segments) - 1) * GOUTTIERE) / len(segments)
+        for index, (table, colonne) in enumerate(segments):
+            page_det["visuels"].append(
+                _segment(
+                    table,
                     colonne,
-                    _requete({"Values": [_projection(_colonne(table, colonne), f"{table}.{colonne}")]}),
-                ),
-            }
-        )
+                    colonne,
+                    MARGE + largeur + GOUTTIERE,
+                    HAUT_CONTENU + index * (hauteur + GOUTTIERE),
+                    COLONNE_DROITE,
+                    hauteur,
+                    f"Segment à poser sur {table}[{colonne}].",
+                )
+            )
     return [page_vue, page_evo, page_rep, page_cor, page_det]
 
 
@@ -517,7 +511,9 @@ def _coquille(theme: dict, pages: list[dict], avec_visuels: bool) -> dict[str, s
             indent=2,
         )
         if avec_visuels:
-            for visuel in page["gardes"]:
+            for ordre, visuel in enumerate(page["gardes"]):
+                visuel["position"]["z"] = ordre * 1000
+                visuel["position"]["tabOrder"] = ordre * 1000
                 fichiers[f"definition/pages/{identifiant}/visuals/{visuel['name']}/visual.json"] = json.dumps(
                     visuel, ensure_ascii=False, indent=2
                 )
@@ -582,6 +578,8 @@ def _resume(pages: list[dict]) -> list[dict]:
     for page in pages:
         champs = []
         for item in page["visuels"]:
+            if item.get("titre"):
+                continue  # le titre de page n'est pas un champ à poser
             secours = item["secours"]
             note = item.get("note")
             champs.append(secours if not note else f"{secours} {note}")

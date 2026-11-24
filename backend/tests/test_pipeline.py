@@ -277,3 +277,94 @@ def test_erreur_imprevue_reste_en_json(tmp_path, monkeypatch):
     corps = reponse.json()
     assert corps["code"] == "generation_echouee"
     assert "panne" not in corps["message"]
+
+
+def _boutique() -> bytes:
+    villes = ["Nice", "Paris", "Lyon", "Marseille", "Lille", "Nantes"]
+    categories = ["Alimentaire", "Mode", "Maison", "Sport"]
+    lignes = ["date;ville;categorie;canal;montant;quantite"]
+    for i in range(240):
+        lignes.append(
+            f"{i % 28 + 1:02d}/{i % 12 + 1:02d}/2025;{villes[i % 6]};{categories[i % 4]};"
+            f"{'Web' if i % 2 else 'Magasin'};{i * 3 + 10},{i % 90 + 10};{i % 9 + 1}"
+        )
+    return "\n".join(lignes).encode()
+
+
+def test_montants_decimaux_proposes_en_numerique():
+    frame, meta = lire_csv(_boutique())
+    profil = profiler(frame, meta)
+    roles = {col["nom"]: col["role_propose"] for col in profil["colonnes"]}
+    assert roles["montant"] == "numerique"
+
+
+def test_dimensions_pour_les_categories():
+    from backend.app.pipeline.modele import construire_plan
+
+    frame, meta = lire_csv(_boutique())
+    roles = {"date": "temporel", "ville": "geographique", "categorie": "categorie", "canal": "categorie",
+             "montant": "numerique", "quantite": "numerique"}
+    nettoye, journal = nettoyer(frame, roles, {}, ";", "date")
+    plan = construire_plan(nettoye, roles, "date")
+    noms = {dim.nom: dim.cle for dim in plan.dimensions}
+    assert noms == {"Dim_Canal": "canal", "Dim_Categorie": "categorie", "Dim_Ville": "ville"}
+    # Les graphiques prennent une catégorie lisible (3 à 20 valeurs), pas celle à 2 valeurs.
+    assert plan.categorie_principale == ("Dim_Ville", "ville")
+    assert plan.categorie_secondaire == ("Dim_Categorie", "categorie")
+    from backend.app.pipeline.tmdl import generer_tmdl
+
+    fichiers = generer_tmdl(plan, journal)
+    relations = fichiers["definition/relationships.tmdl"]
+    assert "fromColumn: Donnees.ville" in relations and "toColumn: Dim_Ville.ville" in relations
+    assert "Comparer.OrdinalIgnoreCase" in fichiers["definition/tables/Dim_Ville.tmdl"]
+    # La clé étrangère est cachée dans la table de faits.
+    bloc_ville = fichiers["definition/tables/Donnees.tmdl"].split("column ville")[1].split("column ")[0]
+    assert "isHidden" in bloc_ville
+
+
+def test_mise_en_page_sans_chevauchement():
+    from backend.app.pipeline.modele import construire_plan
+    from backend.app.pipeline.pbir import generer_pbir
+    from backend.app.pipeline.theme import construire_theme
+
+    frame, meta = lire_csv(_boutique())
+    roles = {"date": "temporel", "ville": "geographique", "categorie": "categorie", "canal": "categorie",
+             "montant": "numerique", "quantite": "numerique"}
+    nettoye, _journal = nettoyer(frame, roles, {}, ";", "date")
+    plan = construire_plan(nettoye, roles, "date")
+    resultat = generer_pbir(plan, construire_theme(["#0F6E56", "#E6A817", "#C4493A"])["theme"])
+    assert resultat["niveau"] == "A"
+    par_page: dict[str, list[dict]] = {}
+    for chemin, contenu in resultat["fichiers"].items():
+        if chemin.endswith("visual.json"):
+            par_page.setdefault(chemin.split("/")[2], []).append(json.loads(contenu)["position"])
+    assert len(par_page) == 5
+    for positions in par_page.values():
+        for pos in positions:
+            assert pos["x"] >= 0 and pos["y"] >= 0
+            assert pos["x"] + pos["width"] <= 1280 and pos["y"] + pos["height"] <= 720
+        for i, a in enumerate(positions):
+            for b in positions[i + 1 :]:
+                separes = (
+                    a["x"] + a["width"] <= b["x"] or b["x"] + b["width"] <= a["x"]
+                    or a["y"] + a["height"] <= b["y"] or b["y"] + b["height"] <= a["y"]
+                )
+                assert separes, (a, b)
+
+
+def test_anneau_secondaire_utilise_le_total():
+    from backend.app.pipeline.pbir import generer_pbir
+
+    frame, meta = lire_csv(_boutique())
+    roles = {"date": "temporel", "ville": "geographique", "categorie": "categorie", "canal": "categorie",
+             "montant": "numerique", "quantite": "numerique"}
+    nettoye, _journal = nettoyer(frame, roles, {}, ";", "date")
+    plan = construire_plan(nettoye, roles, "date")
+    resultat = generer_pbir(plan, construire_theme(["#0F6E56", "#E6A817", "#C4493A"])["theme"])
+    anneaux = [
+        json.loads(contenu) for chemin, contenu in resultat["fichiers"].items()
+        if chemin.endswith("visual.json") and '"donutChart"' in contenu
+    ]
+    assert len(anneaux) == 1
+    mesure = anneaux[0]["visual"]["query"]["queryState"]["Y"]["projections"][0]["field"]["Measure"]["Property"]
+    assert mesure == "Total montant"

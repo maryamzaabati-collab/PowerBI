@@ -1,4 +1,4 @@
-"""Modèle TMDL : Donnees, Calendrier calculé, dimensions préfixées."""
+"""Modèle TMDL : Donnees, Calendrier calculé, dimensions (préfixes répétés et colonnes catégorielles)."""
 
 from __future__ import annotations
 
@@ -196,12 +196,14 @@ def generer_tmdl(plan: Plan, journal: dict) -> dict[str, str]:
     for mesure in formules(plan):
         corps.append(_mesure_tmdl(mesure))
         corps.append("")
+    # Les clés étrangères sont cachées : on filtre par la colonne de la dimension, comme dans un schéma en étoile.
+    cles_etrangeres = {dimension.cle for dimension in plan.dimensions}
     for col in plan.colonnes_faits:
         corps.append(
             _colonne(
                 col,
                 types.get(col, "texte"),
-                masquer=roles.get(col) == "ignoree",
+                masquer=roles.get(col) == "ignoree" or col in cles_etrangeres,
                 mesure=roles.get(col) == "numerique",
             )
         )

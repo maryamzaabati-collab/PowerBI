@@ -78,6 +78,67 @@ def _fond_et_texte(couleurs: list[str]) -> tuple[str, str]:
     return fond, encre
 
 
+def _styles_visuels(palette: list[str], fond: str, encre: str) -> dict:
+    """Cartes posées sur un fond de page légèrement teinté : cadre arrondi, ombre douce, marges internes."""
+    clair = luminance(fond) > 0.5
+    toile = _melanger(fond, _canal(palette[0]), 0.05) if clair else _melanger(fond, (255, 255, 255), 0.06)
+    filet = _melanger(fond, (0, 0, 0), 0.10) if clair else _melanger(fond, (255, 255, 255), 0.16)
+    accent = palette[0] if ratio_contraste(palette[0], fond) >= 3 else (proposer_contraste(palette[0], fond, 3) or encre)
+    sans_cadre = {
+        "background": [{"show": False}],
+        "border": [{"show": False}],
+        "dropShadow": [{"show": False}],
+    }
+    return {
+        "*": {
+            "*": {
+                "background": [{"show": True, "color": {"solid": {"color": fond}}, "transparency": 0}],
+                "border": [{"show": True, "color": {"solid": {"color": filet}}, "radius": 10}],
+                "dropShadow": [
+                    {
+                        "show": True,
+                        "color": {"solid": {"color": "#000000"}},
+                        "transparency": 90 if clair else 70,
+                        "position": "Outer",
+                        "preset": "Custom",
+                        "shadowBlur": 10,
+                        "shadowDistance": 2,
+                        "angle": 90,
+                        "shadowSpread": 0,
+                    }
+                ],
+                "padding": [{"top": 12, "bottom": 12, "left": 14, "right": 14}],
+                "title": [
+                    {
+                        "show": True,
+                        "fontColor": {"solid": {"color": encre}},
+                        "fontSize": 12,
+                        "fontFamily": "Segoe UI Semibold",
+                    }
+                ],
+            }
+        },
+        "page": {
+            "*": {
+                "background": [{"color": {"solid": {"color": toile}}, "transparency": 0}],
+                "outspace": [{"color": {"solid": {"color": toile}}}],
+            }
+        },
+        # Le nom de la mesure est déjà écrit sous le chiffre : pas de titre en double.
+        "card": {
+            "*": {
+                "title": [{"show": False}],
+                "labels": [{"color": {"solid": {"color": accent}}, "fontSize": 28}],
+                "categoryLabels": [{"show": True, "fontSize": 11, "color": {"solid": {"color": encre}}}],
+            }
+        },
+        # Le segment affiche déjà le nom du champ dans son en-tête.
+        "slicer": {"*": {"title": [{"show": False}]}},
+        # Les titres de page sont posés directement sur le fond.
+        "textbox": {"*": sans_cadre},
+    }
+
+
 def construire_theme(couleurs: list[str]) -> dict:
     if not 3 <= len(couleurs) <= 5:
         raise ErreurMetier("generation_echouee", "Le thème demande entre 3 et 5 couleurs.")
@@ -104,13 +165,7 @@ def construire_theme(couleurs: list[str]) -> dict:
             "header": {"fontFace": "Segoe UI Semibold", "fontSize": 14, "color": encre},
             "label": {"fontFace": "Segoe UI", "fontSize": 10, "color": encre},
         },
-        "visualStyles": {
-            "*": {
-                "*": {
-                    "background": [{"color": {"solid": {"color": fond}}}]
-                }
-            }
-        },
+        "visualStyles": _styles_visuels(palette, fond, encre),
     }
     problemes = erreurs(theme, URI_THEME)
     if problemes:

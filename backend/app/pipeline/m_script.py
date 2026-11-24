@@ -204,8 +204,11 @@ def script_dimension(colonnes: list[str], cle: str) -> str:
             "    Entetes = Table.PromoteHeaders(Source, [PromoteAllScalars = true]),",
             f"    Colonnes = Table.SelectColumns(Entetes, {{{projection}}}),",
             f'    Types = Table.TransformColumnTypes(Colonnes, {{{types}}}, "en-US"),',
-            f"    // Une ligne par identifiant. En cas de conflit, la première graphie est gardée.",
-            f"    Distincts = Table.Distinct(Types, {{{littéral_m(cle)}}})",
+            "    // Côté « un » de la relation : pas de clé vide.",
+            f"    SansVide = Table.SelectRows(Types, each {champ_m(cle)} <> null and Text.Trim({champ_m(cle)}) <> \"\"),",
+            "    // Une ligne par clé. Power BI compare les clés sans tenir compte de la casse :",
+            "    // « Nice » et « nice » doivent donner une seule ligne, sinon l'actualisation échoue.",
+            f"    Distincts = Table.Distinct(SansVide, {{{{{littéral_m(cle)}, Comparer.OrdinalIgnoreCase}}}})",
             "in",
             "    Distincts",
         ]

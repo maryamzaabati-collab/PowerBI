@@ -1,4 +1,5 @@
-"""Grain du modèle : Donnees, Calendrier, dimension seulement si le préfixe se répète."""
+"""Grain du modèle : Donnees, Calendrier, dimensions par préfixe répété, puis une dimension
+par colonne catégorielle (ville, catégorie…) pour obtenir un vrai schéma en étoile."""
 
 from __future__ import annotations
 
@@ -59,10 +60,57 @@ def extraire_dimensions(frame: pd.DataFrame, roles: dict, date_pilote: str | Non
         retenues = [col for col in colonnes if col != date_pilote]
         if len(retenues) < 2 or cle not in retenues:
             continue
-        nom = "Dim_" + "".join(morceau[:1].upper() + morceau[1:] for morceau in prefixe.split("_") if morceau)
+        nom = _nom_dimension(prefixe, {dim.nom.lower() for dim in dimensions})
         dimensions.append(Dimension(nom=nom, prefixe=prefixe, cle=cle, colonnes=retenues))
-        if len(dimensions) == 6:
+        if len(dimensions) == MAX_DIMENSIONS:
             break
+    return dimensions
+
+
+# Une dimension sur une colonne presque unique ne filtre rien d'utile et alourdit le modèle.
+CARDINALITE_MAX_DIMENSION = 500
+MAX_DIMENSIONS = 6
+
+
+def _nom_dimension(base: str, pris: set[str]) -> str:
+    nom = "Dim_" + "".join(morceau[:1].upper() + morceau[1:] for morceau in base.split("_") if morceau)
+    candidat, suffixe = nom, 2
+    while candidat.lower() in pris:
+        candidat = f"{nom}{suffixe}"
+        suffixe += 1
+    return candidat
+
+
+def extraire_dimensions_categories(
+    frame: pd.DataFrame, roles: dict, date_pilote: str | None, deja: list[Dimension]
+) -> list[Dimension]:
+    """Une dimension par colonne catégorielle ou géographique (texte) qui se répète.
+
+    La colonne reste dans Donnees comme clé étrangère ; la dimension porte les valeurs distinctes.
+    Les colonnes déjà rangées dans une dimension par préfixe sont laissées de côté.
+    """
+    from backend.app.pipeline.clean import _geo_numerique
+
+    rangees = {col for dim in deja for col in dim.colonnes}
+    pris = {dim.nom.lower() for dim in deja} | {"donnees", "calendrier"}
+    candidates = []
+    for colonne in frame.columns:
+        role = roles.get(colonne)
+        if colonne in rangees or colonne == date_pilote:
+            continue
+        if role not in ("categorie", "geographique") or (role == "geographique" and _geo_numerique(colonne)):
+            continue
+        serie = frame[colonne].dropna()
+        distincts = int(serie.nunique())
+        if distincts < 2 or distincts > CARDINALITE_MAX_DIMENSION or distincts >= len(serie):
+            continue
+        candidates.append((distincts, colonne))
+    candidates.sort()
+    dimensions = []
+    for _distincts, colonne in candidates[: max(0, MAX_DIMENSIONS - len(deja))]:
+        nom = _nom_dimension(colonne, pris)
+        pris.add(nom.lower())
+        dimensions.append(Dimension(nom=nom, prefixe="", cle=colonne, colonnes=[colonne]))
     return dimensions
 
 
@@ -81,15 +129,20 @@ def cardinalite(serie: pd.Series) -> int:
 
 def construire_plan(frame: pd.DataFrame, roles: dict, date_pilote: str | None) -> Plan:
     dimensions = extraire_dimensions(frame, roles, date_pilote)
+    dimensions += extraire_dimensions_categories(frame, roles, date_pilote, dimensions)
     deplacees = {col for dim in dimensions for col in dim.colonnes if col != dim.cle}
     colonnes_faits = [col for col in frame.columns if col not in deplacees]
     mesures = [col for col in colonnes_faits if roles.get(col) == "numerique"]
     gardees, reste = mesures[:8], mesures[8:]
     categories = []
     for col, role in roles.items():
-        if role == "categorie":
+        if col not in frame.columns:
+            continue
+        if role == "categorie" or (role == "geographique" and col in {dim.cle for dim in dimensions}):
             categories.append((col, cardinalite(frame[col]), _table_de(dimensions, col)))
-    categories.sort(key=lambda item: (item[1], item[0]))
+    # Deux valeurs font un graphique pauvre, deux cents un graphique illisible :
+    # on préfère les catégories de 3 à 20 valeurs, autour de 8.
+    categories.sort(key=lambda item: (0 if 3 <= item[1] <= 20 else 1, abs(item[1] - 8), item[0]))
     principale = (categories[0][2], categories[0][0]) if categories else None
     secondaire = (categories[1][2], categories[1][0]) if len(categories) > 1 else None
     cards = {col: cardinalite(frame[col]) for col in frame.columns}

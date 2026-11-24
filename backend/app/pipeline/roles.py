@@ -7,7 +7,7 @@ import re
 import pandas as pd
 
 from backend.app.pipeline.naming import cle_nom
-from backend.app.pipeline.nombres import parse_nombre, separateur_decimal_probable
+from backend.app.pipeline.nombres import analyser_nombre, parse_nombre, separateur_decimal_probable
 
 ROLES = (
     "temporel",
@@ -80,6 +80,19 @@ def _part_nombres(serie: pd.Series, separateur: str) -> float:
     return ok / len(valeurs)
 
 
+def _part_decimaux(serie: pd.Series, separateur: str) -> float:
+    """Part des cellules qui sont des nombres avec une vraie partie décimale (12,50 mais pas 12)."""
+    valeurs = _non_vides(serie)
+    if valeurs.empty:
+        return 0.0
+    ok = 0
+    for v in valeurs:
+        nombre, entier = analyser_nombre(str(v), separateur)
+        if nombre is not None and not entier and float(nombre) != int(nombre):
+            ok += 1
+    return ok / len(valeurs)
+
+
 def proposer_role(nom: str, serie: pd.Series, separateur: str, nb_lignes: int) -> str:
     valeurs = _non_vides(serie)
     if valeurs.empty:
@@ -95,6 +108,10 @@ def proposer_role(nom: str, serie: pd.Series, separateur: str, nb_lignes: int) -
         return "booleen"
     ratio = valeurs.nunique(dropna=True) / len(valeurs)
     if ratio >= 0.98:
+        # Des montants à virgule sont presque tous différents, mais ce sont des mesures,
+        # pas des identifiants. Un identifiant numérique, lui, est entier.
+        if _part_decimaux(serie, separateur) >= 0.5 and _part_nombres(serie, separateur) >= 0.9:
+            return "numerique"
         return "identifiant"
     if _part_nombres(serie, separateur) >= 0.9:
         return "numerique"
