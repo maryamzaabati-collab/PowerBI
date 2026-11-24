@@ -38,15 +38,19 @@ export function Depot({
   const [encodage, setEncodage] = useState("");
   const [separateur, setSeparateur] = useState("");
   const [message, setMessage] = useState<string | null>(null);
+  const [relecture, setRelecture] = useState(false);
 
   async function appliquer() {
-    if (!session) return;
+    if (!session || relecture) return;
     setMessage(null);
+    setRelecture(true);
     try {
       const resultat = await relire(session, encodage || undefined, separateur || undefined);
       onProfil(resultat.session, resultat.profil);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Relecture impossible.");
+    } finally {
+      setRelecture(false);
     }
   }
 
@@ -87,7 +91,12 @@ export function Depot({
                 ))}
               </select>
             </label>
-            <button type="button" className="rounded-full border border-filet px-4 py-2 text-sm" onClick={appliquer}>
+            <button
+              type="button"
+              className="rounded-full border border-filet px-4 py-2 text-sm"
+              disabled={relecture || lecture}
+              onClick={appliquer}
+            >
               Relire
             </button>
             <label className="cursor-pointer text-sm text-pin">
@@ -96,8 +105,11 @@ export function Depot({
                 type="file"
                 accept=".csv,text/csv"
                 className="sr-only"
+                disabled={lecture}
                 onChange={(event) => {
                   const fichier = event.target.files?.[0];
+                  // Vider la valeur permet de redéposer le même fichier après l'avoir modifié.
+                  event.target.value = "";
                   if (fichier) onFichier(fichier);
                 }}
               />

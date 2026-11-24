@@ -24,8 +24,16 @@ LIBELLES = {
 }
 PROGRESSION = {"preparation": 15, "tmdl": 35, "pbir": 55, "compte_rendu": 75, "zip": 100}
 
+# Deux clics rapprochés sur « Lancer » ne doivent pas démarrer deux jobs pour la même session.
+_VERROU_LANCEMENT = threading.Lock()
+
 
 def lancer(session: Session) -> str:
+    with _VERROU_LANCEMENT:
+        return _lancer(session)
+
+
+def _lancer(session: Session) -> str:
     if session.job and session.job.etat == "en_cours":
         raise ErreurMetier(
             "generation_echouee",
@@ -96,7 +104,8 @@ def _executer(session: Session, job: JobEtat, contexte: dict) -> None:
         job.etat = "erreur"
         job.erreur = "generation_echouee"
         job.message = f"La génération s'est arrêtée à l'étape {LIBELLES.get(etape, etape)}."
-        logger.error("generation code=generation_echouee etape=%s", etape)
+        # La trace reste dans les logs du serveur ; le navigateur ne reçoit que le message.
+        logger.exception("generation code=generation_echouee etape=%s", etape)
 
 
 def _avancer(job: JobEtat, etape: str) -> None:

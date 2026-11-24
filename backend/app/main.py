@@ -13,7 +13,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from backend.app.api.routes import routeur
-from backend.app.errors import ErreurMetier
+from backend.app.errors import MESSAGES, ErreurMetier
 from backend.app.limits import HOTE_LOCAL, PORT_LOCAL
 from backend.app.sessions import annuaire
 
@@ -37,6 +37,15 @@ def creer_application() -> FastAPI:
     async def rendre_erreur(_request, exc: ErreurMetier):
         logger.info("erreur code=%s", exc.code)
         return JSONResponse(status_code=400, content={"code": exc.code, "message": exc.message})
+
+    @application.exception_handler(Exception)
+    async def rendre_imprevu(request, exc: Exception):
+        # Une erreur imprévue garde le format JSON attendu par l'interface, sans trace technique.
+        logger.exception("erreur imprévue %s %s", request.method, request.url.path)
+        return JSONResponse(
+            status_code=500,
+            content={"code": "generation_echouee", "message": MESSAGES["generation_echouee"]},
+        )
 
     if os.environ.get("PORT"):
         dist = Path(__file__).resolve().parents[2] / "frontend" / "dist"

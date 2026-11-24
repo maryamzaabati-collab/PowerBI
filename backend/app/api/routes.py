@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, File, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 
@@ -37,12 +38,11 @@ class ThemeIn(BaseModel):
 async def creer_session(fichier: UploadFile = File(...)):
     verifier_nom(fichier.filename)
     contenu = await _lire_limite(fichier)
-    frame, meta = lire_csv(contenu)
-    meta["nom_fichier"] = fichier.filename
-    profil = profiler(frame, meta)
-    profil["nom_fichier"] = fichier.filename
+    nom_fichier = fichier.filename or "donnees.csv"
+    # Lecture et profil en dehors de la boucle d'événements : un gros CSV ne bloque plus les autres requêtes.
+    frame, meta, profil = await run_in_threadpool(_lire_et_profiler, contenu, nom_fichier)
     session = annuaire.creer(
-        nom_fichier=fichier.filename or "donnees.csv",
+        nom_fichier=nom_fichier,
         encodage=meta["encodage"],
         separateur=meta["separateur"],
         frame=frame,
@@ -54,13 +54,13 @@ async def creer_session(fichier: UploadFile = File(...)):
 
 
 @routeur.patch("/sessions/{session_id}/parse")
-async def relire(session_id: str, corps: ParseIn):
+def relire(session_id: str, corps: ParseIn):
     session = annuaire.obtenir(session_id)
+    _refuser_si_job_en_cours(session)
     contenu = (session.dossier / "source.csv").read_bytes()
-    frame, meta = lire_csv(contenu, encodage=corps.encodage, separateur=corps.separateur)
-    meta["nom_fichier"] = session.nom_fichier
-    profil = profiler(frame, meta)
-    profil["nom_fichier"] = session.nom_fichier
+    frame, meta, profil = _lire_et_profiler(
+        contenu, session.nom_fichier, encodage=corps.encodage, separateur=corps.separateur
+    )
     session.frame = frame
     session.encodage = meta["encodage"]
     session.separateur = meta["separateur"]
@@ -69,12 +69,14 @@ async def relire(session_id: str, corps: ParseIn):
     session.nettoye = None
     session.journal = None
     session.zip_path = None
+    session.job = None
     return {"session": session.id, "profil": profil}
 
 
 @routeur.post("/sessions/{session_id}/clean")
-async def nettoyer_session(session_id: str, corps: CleanIn):
+def nettoyer_session(session_id: str, corps: CleanIn):
     session = annuaire.obtenir(session_id)
+    _refuser_si_job_en_cours(session)
     regles = normaliser_regles(corps.regles)
     nettoye, journal = nettoyer(session.frame, corps.roles, regles, session.separateur, corps.date_pilote)
     journal["encodage"] = session.encodage
@@ -90,24 +92,26 @@ async def nettoyer_session(session_id: str, corps: CleanIn):
 
 
 @routeur.put("/sessions/{session_id}/theme")
-async def enregistrer_theme(session_id: str, corps: ThemeIn):
+def enregistrer_theme(session_id: str, corps: ThemeIn):
     session = annuaire.obtenir(session_id)
+    _refuser_si_job_en_cours(session)
     resultat = construire_theme(corps.couleurs)
     session.theme = resultat["theme"]
     session.contrastes = resultat
     session.zip_path = None
+    session.job = None
     return resultat
 
 
 @routeur.post("/sessions/{session_id}/generate")
-async def generer(session_id: str):
+def generer(session_id: str):
     session = annuaire.obtenir(session_id)
     job = lancer(session)
     return {"job": job}
 
 
 @routeur.get("/sessions/{session_id}/jobs/{job_id}")
-async def etat_job(session_id: str, job_id: str):
+def etat_job(session_id: str, job_id: str):
     session = annuaire.obtenir(session_id)
     job = session.job
     if job is None or job.id != job_id:
@@ -125,7 +129,7 @@ async def etat_job(session_id: str, job_id: str):
 
 
 @routeur.get("/sessions/{session_id}/download")
-async def telecharger(session_id: str):
+def telecharger(session_id: str):
     session = annuaire.obtenir(session_id)
     if session.job is None or session.job.etat != "termine" or session.zip_path is None:
         raise ErreurMetier(
@@ -141,7 +145,7 @@ async def telecharger(session_id: str):
 
 
 @routeur.delete("/sessions/{session_id}")
-async def oublier(session_id: str):
+def oublier(session_id: str):
     annuaire.obtenir(session_id)
     annuaire.supprimer(session_id)
     return Response(status_code=204)
@@ -161,3 +165,22 @@ async def _lire_limite(fichier: UploadFile) -> bytes:
     contenu = b"".join(morceaux)
     verifier_taille(len(contenu))
     return contenu
+
+
+def _lire_et_profiler(
+    contenu: bytes, nom_fichier: str, encodage: str | None = None, separateur: str | None = None
+) -> tuple:
+    frame, meta = lire_csv(contenu, encodage=encodage, separateur=separateur)
+    meta["nom_fichier"] = nom_fichier
+    profil = profiler(frame, meta)
+    profil["nom_fichier"] = nom_fichier
+    return frame, meta, profil
+
+
+def _refuser_si_job_en_cours(session) -> None:
+    """Modifier les données pendant la génération mélangerait deux versions dans le ZIP."""
+    if session.job is not None and session.job.etat == "en_cours":
+        raise ErreurMetier(
+            "generation_echouee",
+            "La génération s'est arrêtée. Une génération est déjà en cours pour cette session.",
+        )

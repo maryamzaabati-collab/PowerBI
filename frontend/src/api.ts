@@ -78,3 +78,8 @@ export async function etatJob(session: string, job: string) {
 export function urlTelechargement(session: string) {
   return `/api/sessions/${session}/download`;
 }
+
+// Libère la session côté serveur (dossier temporaire) quand on change de fichier.
+export async function oublier(session: string) {
+  return lire<void>(await fetch(`/api/sessions/${session}`, { method: "DELETE" }));
+}

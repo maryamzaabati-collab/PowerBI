@@ -11,7 +11,7 @@ export function Nettoyage({
 }: {
   session: string;
   profil: Profil;
-  onResultat: (journal: Journal) => void;
+  onResultat: (journal: Journal | null) => void;
   onContinuer: () => void;
 }) {
   const [regles, setRegles] = useState<Regles>(REGLES_DEFAUT);
@@ -27,6 +27,15 @@ export function Nettoyage({
   const [apercu, setApercu] = useState<Profil["apercu"] | null>(null);
   const [journal, setJournal] = useState<Journal | null>(null);
   const [enCours, setEnCours] = useState(false);
+
+  // Un réglage modifié après coup rend le résultat affiché périmé : on le retire
+  // pour ne pas générer avec l'ancien nettoyage sans le savoir.
+  function perimer() {
+    if (!journal) return;
+    setJournal(null);
+    setApercu(null);
+    onResultat(null);
+  }
 
   async function appliquer() {
     setEnCours(true);
@@ -64,7 +73,10 @@ export function Nettoyage({
             <input
               type="checkbox"
               checked={regles[cle]}
-              onChange={(event) => setRegles({ ...regles, [cle]: event.target.checked })}
+              onChange={(event) => {
+                setRegles({ ...regles, [cle]: event.target.checked });
+                perimer();
+              }}
             />
             {libelle}
           </label>
@@ -89,7 +101,10 @@ export function Nettoyage({
                   <select
                     className="rounded-lg border border-filet bg-carte px-2 py-1"
                     value={roles[col.nom]}
-                    onChange={(event) => setRoles({ ...roles, [col.nom]: event.target.value as Role })}
+                    onChange={(event) => {
+                      setRoles({ ...roles, [col.nom]: event.target.value as Role });
+                      perimer();
+                    }}
                   >
                     {ROLES.map((role) => (
                       <option key={role.id} value={role.id}>
@@ -109,7 +124,10 @@ export function Nettoyage({
           <select
             className="mt-1 block rounded-lg border border-filet bg-carte px-2 py-2"
             value={datePilote}
-            onChange={(event) => setDatePilote(event.target.value)}
+            onChange={(event) => {
+              setDatePilote(event.target.value);
+              perimer();
+            }}
           >
             {temporelles.map((nom) => (
               <option key={nom}>{nom}</option>

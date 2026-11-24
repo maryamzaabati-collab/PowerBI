@@ -14,14 +14,17 @@ export function DropZone({
       className={`block cursor-pointer rounded-2xl border-2 border-dashed px-6 py-12 text-center ${
         survole ? "border-pin bg-pin/5" : "border-filet bg-carte"
       }`}
+      aria-busy={occupé}
       onDragOver={(event) => {
         event.preventDefault();
-        setSurvole(true);
+        if (!occupé) setSurvole(true);
       }}
       onDragLeave={() => setSurvole(false)}
       onDrop={(event) => {
         event.preventDefault();
         setSurvole(false);
+        // Un second dépôt pendant la lecture lancerait deux sessions en parallèle.
+        if (occupé) return;
         const fichier = event.dataTransfer.files?.[0];
         if (fichier) onFichier(fichier);
       }}
@@ -33,6 +36,7 @@ export function DropZone({
         disabled={occupé}
         onChange={(event) => {
           const fichier = event.target.files?.[0];
+          event.target.value = "";
           if (fichier) onFichier(fichier);
         }}
       />

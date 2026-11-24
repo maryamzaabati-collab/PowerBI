@@ -10,7 +10,7 @@ export function Theme({
   onContinuer,
 }: {
   session: string;
-  onTheme: (theme: ThemeReponse) => void;
+  onTheme: (theme: ThemeReponse | null) => void;
   onContinuer: () => void;
 }) {
   const [couleurs, setCouleurs] = useState(["#0F6E56", "#E6A817", "#C4493A", "#1F4E79", "#6B4C9A"]);
@@ -37,6 +37,7 @@ export function Theme({
         couleurs={couleurs}
         onChange={(palette) => {
           setCouleurs(palette);
+          if (resultat) onTheme(null);
           setResultat(null);
         }}
       />

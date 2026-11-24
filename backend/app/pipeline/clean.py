@@ -206,7 +206,9 @@ def nettoyer(
                         continue
                     nombre, entier = analyser_nombre(str(valeur), separateur)
                     convertis.append(nombre if nombre is not None else None)
-                travail[col] = convertis
+                # dtype objet : sinon pandas passe une colonne d'entiers avec des vides
+                # en float64 (3 → 3.0) et la colonne est typée décimal au lieu d'entier.
+                travail[col] = pd.Series(convertis, index=travail.index, dtype=object)
 
     def faire_dates() -> None:
         if not regles["dates"]:

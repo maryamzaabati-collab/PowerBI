@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { etatJob, generer } from "../api";
+import { ErreurApi, etatJob, generer } from "../api";
 import type { Job } from "../types";
 
 export function Generation({
@@ -13,24 +13,52 @@ export function Generation({
 }) {
   const [job, setJob] = useState<Job | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [demarrage, setDemarrage] = useState(false);
 
+  const enCours = job?.etat === "en_cours";
+  const jobId = job?.job;
+
+  // Une requête de suivi à la fois (setTimeout enchaîné plutôt que setInterval),
+  // et arrêt dès que le job se termine ou que le suivi échoue.
   useEffect(() => {
-    if (!job || job.etat !== "en_cours") return;
-    const timer = window.setInterval(async () => {
+    if (!enCours || !jobId) return;
+    let actif = true;
+    let timer: number | undefined;
+    let echecs = 0;
+
+    async function suivre() {
       try {
-        const etat = await etatJob(session, job.job);
+        const etat = await etatJob(session, jobId!);
+        if (!actif) return;
+        echecs = 0;
         setJob(etat);
         if (etat.etat === "termine") onTermine(etat);
         if (etat.etat === "erreur") setMessage(etat.message);
+        if (etat.etat === "en_cours") timer = window.setTimeout(suivre, 500);
       } catch (error) {
-        setMessage(error instanceof Error ? error.message : "Le suivi du job a échoué.");
+        if (!actif) return;
+        echecs += 1;
+        const definitif = (error instanceof ErreurApi && error.code === "session_expiree") || echecs >= 5;
+        if (definitif) {
+          setMessage(error instanceof Error ? error.message : "Le suivi du job a échoué.");
+          setJob((avant) => (avant ? { ...avant, etat: "erreur" } : avant));
+        } else {
+          timer = window.setTimeout(suivre, 1000);
+        }
       }
-    }, 500);
-    return () => window.clearInterval(timer);
-  }, [job, onTermine, session]);
+    }
+
+    timer = window.setTimeout(suivre, 500);
+    return () => {
+      actif = false;
+      window.clearTimeout(timer);
+    };
+  }, [enCours, jobId, onTermine, session]);
 
   async function lancer() {
+    if (demarrage) return;
     setMessage(null);
+    setDemarrage(true);
     try {
       const cree = await generer(session);
       setJob({
@@ -45,6 +73,8 @@ export function Generation({
       });
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "La génération n'a pas démarré.");
+    } finally {
+      setDemarrage(false);
     }
   }
 
@@ -57,7 +87,7 @@ export function Generation({
       <button
         type="button"
         className="rounded-full bg-pin px-5 py-2 text-sm font-semibold text-white"
-        disabled={!pret || job?.etat === "en_cours"}
+        disabled={!pret || demarrage || job?.etat === "en_cours"}
         onClick={lancer}
       >
         Lancer la génération

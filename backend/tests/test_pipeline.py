@@ -239,3 +239,41 @@ def test_api_zip(client: TestClient):
     refus = client.post("/api/sessions", files={"fichier": ("note.txt", b"a,b\n1,2\n", "text/plain")})
     assert refus.status_code == 400
     assert refus.json()["code"] == "pas_un_csv"
+
+
+def test_entier_avec_vides_reste_entier():
+    # Sans dtype objet, pandas passait [3, None, 5] en float64 et la colonne devenait décimale.
+    frame, meta = lire_csv(b"id;qte;prix\na;3;2,5\nb;;3\nc;5;4\n")
+    nettoye, journal = nettoyer(frame, {"id": "identifiant", "qte": "numerique", "prix": "numerique"}, {}, ";", None)
+    types = {col["nom"]: col["type_apres"] for col in journal["colonnes"]}
+    assert types["qte"] == "entier"
+    assert types["prix"] == "décimal"
+    assert [v for v in nettoye["qte"] if v is not None] == [3, 5]
+    assert all(isinstance(v, int) for v in nettoye["qte"].dropna())
+
+
+def test_relecture_remet_le_job_a_zero(client: TestClient):
+    session = client.post("/api/sessions", files={"fichier": ("ventes.csv", CSV, "text/csv")}).json()["session"]
+    relu = client.patch(f"/api/sessions/{session}/parse", json={"separateur": ";"})
+    assert relu.status_code == 200, relu.text
+    # Sans nettoyage après la relecture, la génération doit refuser de démarrer.
+    refus = client.post(f"/api/sessions/{session}/generate")
+    assert refus.status_code == 400
+    assert refus.json()["code"] == "generation_echouee"
+
+
+def test_erreur_imprevue_reste_en_json(tmp_path, monkeypatch):
+    monkeypatch.setenv("PBI_PACK_TMP", str(tmp_path))
+    from backend.app.api import routes
+    from backend.app.main import app
+
+    def casse(*_args, **_kwargs):
+        raise RuntimeError("panne")
+
+    monkeypatch.setattr(routes, "profiler", casse)
+    with TestClient(app, raise_server_exceptions=False) as test:
+        reponse = test.post("/api/sessions", files={"fichier": ("ventes.csv", CSV, "text/csv")})
+    assert reponse.status_code == 500
+    corps = reponse.json()
+    assert corps["code"] == "generation_echouee"
+    assert "panne" not in corps["message"]
